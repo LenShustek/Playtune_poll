@@ -245,7 +245,7 @@
       - added support for ATmega32U4
    10 July 2016, Nick Shvelidze
       - Fixed include file names for Arduino 1.6 on Linux.
-   11 July 2017, Len Shustek
+   11 July 2016, Len Shustek
       - Start this derivative version that uses polling instead of a timer
         for each channel. It needs a fast processor, but can play an arbitrary
         number of notes simultaneously using only one timer.
