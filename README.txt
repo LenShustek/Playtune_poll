@@ -1,4 +1,3 @@
-/******************************************************************************
 
      Playtune_poll
 
@@ -30,7 +29,24 @@
    can be used and mapped to MIDI patches. It currently only supports Teensy.
    https://github.com/LenShustek/playtune_samp
 
-   ***** Details about this version: Playtune_poll
+     (4) The fourth version is an audio object for the PJRC Audio Library.
+   https://www.pjrc.com/teensy/td_libs_Audio.html
+   It allows up to 16 simultaneous sound generators that are internally mixed, at
+   the appropriate volume, to produce one monophonic audio stream.
+   Sounds are created from sampled one-cycle waveforms for any number of instruments,
+   each with its own attack-hold-decay-sustain-release envelope. Percussion sounds
+   (from MIDI channel 10) are generated from longer sampled waveforms of a complete
+   instrument strike. Each generator's volume is independently adjusted according to
+   the MIDI velocity of the note being played before all channels are mixed.
+   www.github.com/LenShustek/Playtune_synth
+
+   (5) The fifth version is for the Teensy 3.1/3.2, and uses the four Periodic Interval
+   Timers in the Cortex M4 processor to support up to 4 simultaneous notes.
+   It uses less CPU time than the polling version, but is limited to 4 notes at a time.
+   (This was written to experiment with multi-channel multi-Tesla Coil music playing,
+   where I use Flexible Timer Module FTM0 for generating precise one-shot pulses.
+   But I ultimately switched to the polling version to play more simultaneous notes.)
+   www.github.com/LenShustek/Playtune_Teensy***** Details about this version: Playtune_poll
 
    The advantage of this polling scheme is that you can play more simultaneous notes
    than there are hardware timers. The disadvantages are that it takes more CPU power,
@@ -82,7 +98,7 @@
    different percussion instruments. It will only play one percussion sound at a time.
 
    In order for this to work, the bytestream must have the notes on the percussion track
-   relocated from 0..127 to 128..255, which Miditones will do with the -pt option in 
+   relocated from 0..127 to 128..255, which Miditones will do with the -pt option in
    addition to the -v option.  (Again, it best to also use -d.)
 
 
@@ -109,7 +125,7 @@
    http://playground.arduino.cc/Code/Timer1 and put into your Arduino library
    directory, or just put in the directory with the other files.
 
-   There are four public functions and one public variable that you can use
+   There are five public functions and one public variable that you can use
    in your runtime code in Playtune_poll_test.ino.
 
    void tune_start_timer(int microseconds)
@@ -128,6 +144,12 @@
 
      This global variable will be "true" if a score is playing, and "false" if not.
      You can use this to see when a score has finished.
+
+   void tune_speed(unsigned int percent)
+
+    New for the Teensy version, this changes playback speed to the specified percent
+    of normal. The minimum is percent=20 (1/5 slow speed) and the maximum is
+    percent=500 (5x fast speed).
 
    void tune_stopscore()
 
@@ -203,6 +225,3 @@
 
    Len Shustek, originally 4 Feb 2011,
    but updated for the polling version in July 2016.
-
-   MIDI music file.
-

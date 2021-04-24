@@ -1,5 +1,4 @@
 // Playtune_poll.h
-#define DBUG 0 // generate debugging code?
 
 // Here is where you define the pin configuration for playing music. Because we use direct register 
 // manipulation for speed, it's a little complicated, so bear with me.
@@ -159,7 +158,7 @@
 
 #define SCOPE_TEST true // make scope measurements?
 #ifdef CORE_TEENSY
-#define SCOPE_PIN 4     // board pin
+#define SCOPE_PIN 13     // board pin
 #endif
 #ifdef ARDUINO_NANO
 #define SCOPE_PIN 4     // board pin
@@ -178,4 +177,6 @@ void tune_start_timer(int);
 void tune_playscore(const byte *);
 void tune_stopscore(void);
 void tune_stop_timer(void);
-
+extern volatile boolean tune_playing;
+void tune_speed(unsigned percent);       // adjust playing speed:
+ //                                          100 = normal, 50 = slow by 1/2, 200 = doubletime, etc.
