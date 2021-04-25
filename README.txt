@@ -29,7 +29,7 @@
    can be used and mapped to MIDI patches. It currently only supports Teensy.
    https://github.com/LenShustek/playtune_samp
 
-     (4) The fourth version is an audio object for the PJRC Audio Library.
+   The fourth version is an audio object for the PJRC Audio Library.
    https://www.pjrc.com/teensy/td_libs_Audio.html
    It allows up to 16 simultaneous sound generators that are internally mixed, at
    the appropriate volume, to produce one monophonic audio stream.
@@ -40,13 +40,15 @@
    the MIDI velocity of the note being played before all channels are mixed.
    www.github.com/LenShustek/Playtune_synth
 
-   (5) The fifth version is for the Teensy 3.1/3.2, and uses the four Periodic Interval
+   The fifth version is for the Teensy 3.1/3.2, and uses the four Periodic Interval
    Timers in the Cortex M4 processor to support up to 4 simultaneous notes.
    It uses less CPU time than the polling version, but is limited to 4 notes at a time.
    (This was written to experiment with multi-channel multi-Tesla Coil music playing,
    where I use Flexible Timer Module FTM0 for generating precise one-shot pulses.
    But I ultimately switched to the polling version to play more simultaneous notes.)
-   www.github.com/LenShustek/Playtune_Teensy***** Details about this version: Playtune_poll
+   www.github.com/LenShustek/Playtune_Teensy
+   
+   ***** Details about this version: Playtune_poll
 
    The advantage of this polling scheme is that you can play more simultaneous notes
    than there are hardware timers. The disadvantages are that it takes more CPU power,
