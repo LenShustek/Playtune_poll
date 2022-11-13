@@ -129,7 +129,7 @@
    http://playground.arduino.cc/Code/Timer1 and put into your Arduino library
    directory, or just put in the directory with the other files.
 
-   There are five public functions and one public variable that you can use
+   There are seven public functions and one public variable that you can use
    in your runtime code in Playtune_poll_test.ino.
 
    void tune_start_timer(int microseconds)
@@ -151,9 +151,9 @@
 
    void tune_speed(unsigned int percent)
 
-    New for the Teensy version, this changes playback speed to the specified percent
-    of normal. The minimum is percent=20 (1/5 slow speed) and the maximum is
-    percent=500 (5x fast speed).
+    This changes playback speed to the specified percent of normal. 
+    The minimum is percent=20 (5x slowdown),
+    and the maximum is percent=500 (5x speedup).
 
    void tune_stopscore()
 
@@ -162,8 +162,12 @@
    void tune_stop_timer()
 
      This stops playing and also stops the timer interrupt.
-     Do this when you don't want to play any more tunes.
 
+   void tune_resumescore (bool init_pins)
+
+     The resumes playing a score that was stopped with tune_stopscore() or tune_stop_timer().
+     If the I/O pins need to be reinitialized because they were used by something else in the
+     meantime, pass TRUE for init_pins.
 
    *****  The score bytestream  *****
 
@@ -282,6 +286,10 @@
    23 April 2021, Len Shustek
       - Create TESLA_COIL version that only works for Teensy
       - Add tune_speed()
+  12 November 2022, Len Shustek
+      - Add tune_resumescore(), suggested by GitHub user vsdyachkov.
+      - Add suggestions for additional pins usable on the Ardino Nano
+        that avoid, for example, conflicts with SPI.
 */
 
 #define TESLA_COIL 0        // special version for Tesla coils? 
@@ -325,6 +333,7 @@ static byte num_chans = 	// how many channels
 static boolean pins_initialized = false;
 static boolean timer_running = false;
 static boolean volume_present = ASSUME_VOLUME;
+static int saved_polltime = 0; 
 
 static const byte *score_start = 0;
 static const byte *score_cursor = 0;
@@ -506,6 +515,7 @@ void timer_ISR(void);
 //------------------------------------------------------------------------------
 
 void tune_start_timer(int polltime) {
+   saved_polltime = polltime; // save for tune_resumescore()
    // Decide on an interrupt poll time
    if (polltime) // set by the caller
       polltime = max( min(polltime, MAX_POLLTIME_USEC), MIN_POLLTIME_USEC);
@@ -841,7 +851,7 @@ void tune_playscore (const byte * score) {
       tune_init_pins();
    if (tune_playing) tune_stopscore();
    if (!timer_running)
-      tune_start_timer(0);
+      tune_start_timer(saved_polltime);
    score_start = score;
    volume_present = ASSUME_VOLUME;
    num_chans_used = MAX_CHANS;
@@ -916,6 +926,7 @@ void tune_stepscore (void) { // continue in the score
       else if (opcode == CMD_RESTART) { /* restart score */
          score_cursor = score_start; }
       else if (opcode == CMD_STOP) { /* stop score */
+         score_cursor = 0;
          tune_playing = false;
          break; } } }
 
@@ -938,6 +949,17 @@ void tune_stop_timer(void) {
    Timer1.stop();
    Timer1.detachInterrupt();
    timer_running = false; }
+
+//------------------------------------------------------------------------------
+// Resume playing a score that was stopped
+//------------------------------------------------------------------------------
+
+void tune_resumescore(bool init_pins) {
+  if (init_pins) tune_init_pins();
+  if (score_cursor) {
+    if (!timer_running) tune_start_timer(saved_polltime);
+    tune_stepscore();  // startup commands again
+    tune_playing = true; } }
 
 //------------------------------------------------------------------------------
 //  Timer interrupt Service Routine

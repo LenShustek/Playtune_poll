@@ -677,6 +677,17 @@ const unsigned char PROGMEM batman_score [] = {
 };
 // This score contains 4122 bytes, and 6 tone generators are used.
 
+const unsigned char PROGMEM test_score [] = { // test each of 8 channels individually
+#define TESTCHAN(n) 0x90+n, 69+n, 5,0, 0x80+n 
+TESTCHAN(0),
+TESTCHAN(1),
+TESTCHAN(2),
+TESTCHAN(3),
+TESTCHAN(4),
+TESTCHAN(5),
+TESTCHAN(6),
+TESTCHAN(7),
+5, 0, 0xf0 };
 
 void setup() {
 #if DBUG
@@ -686,12 +697,22 @@ void setup() {
   //tune_start_timer(15); // maybe specify the interrupt rate in microseconds
 }
 
+#define TEST_STOP_RESUME false
 void loop () {
-  tune_playscore(bach_score); // no volume or drums
+  tune_playscore(test_score); // test each channel
   while (tune_playing) ;
+  tune_playscore(bach_score); // no volume or drums
+  while (tune_playing) {
+    #if TEST_STOP_RESUME
+    delay(5000); // play for 5 seconds
+    tune_stopscore(); // stop the score
+    //tune_stop_timer(); // stop the score and the timer
+    delay(1000); // for 1 second
+    tune_resumescore(false); // then resume playing
+    #endif
+  }
   delay(2000);
   tune_playscore(batman_score); // volume and drums
   while (tune_playing) ;
   delay(2000);
 }
-

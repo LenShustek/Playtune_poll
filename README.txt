@@ -127,7 +127,7 @@
    http://playground.arduino.cc/Code/Timer1 and put into your Arduino library
    directory, or just put in the directory with the other files.
 
-   There are five public functions and one public variable that you can use
+   There are seven public functions and one public variable that you can use
    in your runtime code in Playtune_poll_test.ino.
 
    void tune_start_timer(int microseconds)
@@ -149,9 +149,9 @@
 
    void tune_speed(unsigned int percent)
 
-    New for the Teensy version, this changes playback speed to the specified percent
-    of normal. The minimum is percent=20 (1/5 slow speed) and the maximum is
-    percent=500 (5x fast speed).
+    This changes playback speed to the specified percent of normal. 
+    The minimum is percent=20 (5x slowdown),
+    and the maximum is percent=500 (5x speedup).
 
    void tune_stopscore()
 
@@ -160,8 +160,12 @@
    void tune_stop_timer()
 
      This stops playing and also stops the timer interrupt.
-     Do this when you don't want to play any more tunes.
 
+   void tune_resumescore (bool init_pins)
+
+     The resumes playing a score that was stopped with tune_stopscore() or tune_stop_timer().
+     If the I/O pins need to be reinitialized because they were used by something else in the
+     meantime, pass TRUE for init_pins.
 
    *****  The score bytestream  *****
 
