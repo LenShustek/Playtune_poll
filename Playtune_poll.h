@@ -12,7 +12,7 @@
 // Next, choose which set of pins in this file you want to use. This should match the processor 
 // chosen in the tools/board menu of the Arduino IDE (Integrated Development Environment).
 
-#define TEENSY_3x       // which set of pin definitions, which are below, to use
+#define ARDUINO_NANO       // which set of pin definitions below to use
 
 // Now define the output pin that is wired to the speaker for each channel in the section you chose. 
 // The pin numbers are the "virtual" numbers that typically are printed on the board and are used in 
@@ -48,7 +48,7 @@
 // For each channel, you need to give the pin number, the data register that it is wired
 // to, and the number of the bit in that register that corresponds to the specific pin.
 // You can get that information by looking at the schematic for the board, or from one
-// of the great cheat-sheets at http://www.pighixxx.com/test/pinoutspg/boards/
+// of the detailed pinout diagrams like https://docs.arduino.cc/hardware/nano.
 // I've included several examples below.
 
 #ifdef ARDUNIO_MICRO  // define 8 channels on an Arduino Micro
@@ -106,17 +106,41 @@
 #define CHAN_4_REG B
 #define CHAN_4_BIT 1
 
-#define CHAN_5_PIN 10
+#define CHAN_5_PIN 10 // conflicts with SPI SS
 #define CHAN_5_REG B
 #define CHAN_5_BIT 2
 
-#define CHAN_6_PIN 11
+#define CHAN_6_PIN 11 // conflicts with SPI MOSI
 #define CHAN_6_REG B
 #define CHAN_6_BIT 3
 
-#define CHAN_7_PIN 12
+#define CHAN_7_PIN 12 // conflicts with SPI MISO
 #define CHAN_7_REG B
 #define CHAN_7_BIT 4
+//here are some alternates you could use on the Nano for any of the channels:
+//#define CHAN_x_PIN 14
+//#define CHAN_x_REG C
+//#define CHAN_x_BIT 0
+
+//#define CHAN_x_PIN 15
+//#define CHAN_x_REG C
+//#define CHAN_x_BIT 1
+
+//#define CHAN_x_PIN 16
+//#define CHAN_x_REG C
+//#define CHAN_x_BIT 2
+
+//#define CHAN_x_PIN 17
+//#define CHAN_x_REG C
+//#define CHAN_x_BIT 3
+
+//#define CHAN_x_PIN 18
+//#define CHAN_x_REG C
+//#define CHAN_x_BIT 4
+
+//#define CHAN_x_PIN 19
+//#define CHAN_x_REG C
+//#define CHAN_x_BIT 5
 #endif // Arduino Nano
 
 #ifdef ARDUINO_MEGA  // define 8 channels on an Arduino Mega
@@ -153,10 +177,10 @@
 #define CHAN_7_BIT 2
 #endif // Arduino Mega
 
-// If you want to use an oscillocope to measure how long our interrupt routine
+// If you want to use an oscilloscope to measure how long our interrupt routine
 // takes, you can configure a pin that outputs a high when it is running.
 
-#define SCOPE_TEST true // make scope measurements?
+#define SCOPE_TEST false // make scope measurements?
 #ifdef CORE_TEENSY
 #define SCOPE_PIN 13     // board pin
 #endif
@@ -177,6 +201,7 @@ void tune_start_timer(int);
 void tune_playscore(const byte *);
 void tune_stopscore(void);
 void tune_stop_timer(void);
+void tune_resumescore(bool init_pins);
 extern volatile boolean tune_playing;
 void tune_speed(unsigned percent);       // adjust playing speed:
  //                                          100 = normal, 50 = slow by 1/2, 200 = doubletime, etc.
