@@ -295,6 +295,8 @@
       - Major change to allow tables to be in Flash ROM memory when the polling
         interval is known at compile time, ie DO_CONSTANT_POLLTIME is set to 1.
         That saves about 1200 bytes of RAM, which is a big deal on a Nano with 2K!
+   14 November 2022, Len Shustek
+      - Adjust the percussion sound depending on the note volume, if DO_PERCUSSION_VOLUME
 */
 
 #define TESLA_COIL 0        // special version for Tesla coils? 
@@ -305,6 +307,7 @@
 
 #define DO_VOLUME 1         // generate volume-modulating code? Needs -v on Miditones.
 #define DO_PERCUSSION 1     // generate percussion sounds? Needs DO_VOLUME, and -pt on Miditones
+#define DO_PERCUSSION_VOLUME 1 // adjust percussion based on its volume?
 
 #define DO_CONSTANT_POLLTIME 1 // Is polltime is a constant at compile-time? If so, we save about 
 //                                1200 bytes of RAM. Note that tune_start_timer() can't be called then.
@@ -870,15 +873,23 @@ void tune_playnote (byte chan, byte note, byte volume) {
          if (drum_chan == NO_DRUM) { // drum player is free
             drum_chan = chan; // assign it
             #if DO_CONSTANT_POLLTIME
-            drum_tick_count = drum_tick_limit = pgm_read_byte(min_drum_ticks_PGM + note - 128);
+            drum_tick_limit = pgm_read_byte(min_drum_ticks_PGM + note - 128);
             drum_duration = pgm_read_word(min_drum_cap_PGM + note - 128); // cap on drum note duration
             #else
-            drum_tick_count = drum_tick_limit = drum_ticks[note - 128];
+            drum_tick_limit = drum_ticks[note - 128];
             drum_duration = drum_cap[note - 128]; // cap on drum note duration
+            #endif
+            #if DO_PERCUSSION_VOLUME
+            drum_tick_limit = ((uint16_t)drum_tick_limit * volume) >> 8;
+            if (drum_tick_limit == 0) drum_tick_limit = 1;
+            drum_duration = ((uint32_t)drum_duration * volume) >> 8; 
+            if (drum_duration == 0) drum_duration = 1;
             #endif
             #if DBUG
             Serial.print("  drum tick limit="); Serial.println(drum_tick_limit);
+            Serial.print("  drum tick duration="); Serial.println(drum_duration);
             #endif
+            drum_tick_count = drum_tick_limit;
          } }
       #endif
    } }
@@ -889,7 +900,7 @@ void tune_playnote (byte chan, byte note) {
       if (note > MAX_NOTE) note = MAX_NOTE;
       decrement[chan] =
          #if DO_CONSTANT_POLLTIME
-         pgm_read_dword(max_decrement_PGM + note)
+         pgm_read_dword(max_decrement_PGM + note);
          #else
          decrement_table[note];
          #endif
