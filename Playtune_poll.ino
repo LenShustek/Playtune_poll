@@ -49,7 +49,7 @@
    where I use Flexible Timer Module FTM0 for generating precise one-shot pulses.
    But I ultimately switched to the polling version to play more simultaneous notes.)
    www.github.com/LenShustek/Playtune_Teensy
-   
+
    ***** Details about this version: Playtune_poll
 
    The advantage of this polling scheme is that you can play more simultaneous notes
@@ -134,7 +134,8 @@
 
    void tune_start_timer(int microseconds)
 
-    This is optional. Call it to set how often notes should be checked for transitions,
+    This is optional, and is available only if DO_CONSTANT_POLLTIME is set to 0.
+    Call it to set how often notes should be checked for transitions,
     from 5 to 50 microseconds. If you don't call it, we'll pick something that seems
     appropriate from the type of microcontroller and the frequency it's running at.
 
@@ -151,7 +152,7 @@
 
    void tune_speed(unsigned int percent)
 
-    This changes playback speed to the specified percent of normal. 
+    This changes playback speed to the specified percent of normal.
     The minimum is percent=20 (5x slowdown),
     and the maximum is percent=500 (5x speedup).
 
@@ -286,10 +287,14 @@
    23 April 2021, Len Shustek
       - Create TESLA_COIL version that only works for Teensy
       - Add tune_speed()
-  12 November 2022, Len Shustek
+   12 November 2022, Len Shustek
       - Add tune_resumescore(), suggested by GitHub user vsdyachkov.
       - Add suggestions for additional pins usable on the Ardino Nano
         that avoid, for example, conflicts with SPI.
+   13 November 2022, Len Shustek
+      - Major change to allow tables to be in Flash ROM memory when the polling
+        interval is known at compile time, ie DO_CONSTANT_POLLTIME is set to 1.
+        That saves about 1200 bytes of RAM, which is a big deal on a Nano with 2K!
 */
 
 #define TESLA_COIL 0        // special version for Tesla coils? 
@@ -299,7 +304,11 @@
 #include "Playtune_poll.h"  // this contains, among other things, the output pin definitions
 
 #define DO_VOLUME 1         // generate volume-modulating code? Needs -v on Miditones.
-#define DO_PERCUSSION 0     // generate percussion sounds? Needs DO_VOLUME, and -pt on Miditones
+#define DO_PERCUSSION 1     // generate percussion sounds? Needs DO_VOLUME, and -pt on Miditones
+
+#define DO_CONSTANT_POLLTIME 1 // Is polltime is a constant at compile-time? If so, we save about 
+//                                1200 bytes of RAM. Note that tune_start_timer() can't be called then.
+#define CONSTANT_POLLTIME 0    // The constant polltime in usec; if 0, we pick a good one at compile time.
 
 #define ASSUME_VOLUME  0    // if the file has no header, should we assume there is volume info?
 
@@ -333,7 +342,6 @@ static byte num_chans = 	// how many channels
 static boolean pins_initialized = false;
 static boolean timer_running = false;
 static boolean volume_present = ASSUME_VOLUME;
-static int saved_polltime = 0; 
 
 static const byte *score_start = 0;
 static const byte *score_cursor = 0;
@@ -414,51 +422,91 @@ struct file_hdr_t {  // the optional bytestream file header
    percussion output based on a random variable. This essentially sets the frequency
    of the percussion chirp.
 
-   When we start the timer, we create the tables we actually use in RAM. Those are based on a
-   possibly higher interrupt frequency that we are told to use, or we picked based on the type
-   and speed of the processor.  The actual decrements will be smaller because the interrupt
-   is happening more often, so there is no danger of introducing 32-bit overflow. The tick
-   counts will be larger, so more volumes are possible for high notes.
+   If the polling interval is specified at compile time (DO_CONSTANT_POLLTIME), then we compile
+   adjusted tables into ROM, based on a possibly higher interrupt frequency that are told to
+   use, or we picked based on the type and speed of the processor.   The actual decrements will
+   be smaller because the interrupt is happening more often, so there is no danger of introducing
+   32-bit overflow. The tick counts will be larger, so more volumes are possible for high notes.
    Everything gets better at higher frequencies, including how the notes sound!
+
+   If the polling interval can change (DO_CONSTANT_POLLTIME is zero), then
+   when we start the timer, we create the tables we actually use in RAM, which takes about
+   1280 bytes in the worst case.
 */
 
+#if DO_CONSTANT_POLLTIME  // do all the calculations at compile-time with macros
+   #if CONSTANT_POLLTIME==0  // we pick a time
+      #ifndef CORE_TEENSY
+         #if F_CPU >= 48000000L
+            #define POLLTIME 25  // fast AVR/AVX
+         #else
+            #define POLLTIME 50  // slow AVR/AVX
+         #endif
+      #else // Teensy
+         #if F_CPY < 50000000L
+            #define POLLTIME 20  // slow Teensies
+         #else
+            #define POLLTIME 10  // fast Teensies
+         #endif
+      #endif
+   #else
+      #define POLLTIME CONSTANT_POLLTIME // the user specified a time
+   #endif
+   #if DO_VOLUME
+      #define SD(x) ((x * (uint64_t)POLLTIME) / MAX_POLLTIME_USEC) >> 1  // scale down the decrement table for a half period
+   #else
+      #define SD(x) (x * (uint64_t)POLLTIME) / MAX_POLLTIME_USEC  // scale down the decrement table for the full period
+   #endif
+   #define SU(x) ((uint32_t)x * MAX_POLLTIME_USEC) / POLLTIME  // scale up the four other tables
+#else  // !DO_CONSTANT_POLLTIME: we will compute new scaled tables during initialization; just compile the max or min
+   #define SD(x) x
+   #define SU(x) x
+   #define POLLTIME 0
+#endif
+
+static int polltime = POLLTIME;  // microseconds between channel polls
 #define ACCUM_RESTART 1073741824L  // 2^30. Generates 1-byte arithmetic on 4-byte numbers!
 #define MAX_NOTE 123 // the max note number; we thus allow MAX_NOTE+1 notes
 #define MAX_POLLTIME_USEC 50
 #define MIN_POLLTIME_USEC 5
+
 const int32_t max_decrement_PGM[MAX_NOTE + 1] PROGMEM = {
-   877870L, 930071L, 985375L, 1043969L, 1106047L, 1171815L, 1241495L, 1315318L,
-   1393531L, 1476395L, 1564186L, 1657197L, 1755739L, 1860141L, 1970751L,
-   2087938L, 2212093L, 2343631L, 2482991L, 2630637L, 2787063L, 2952790L,
-   3128372L, 3314395L, 3511479L, 3720282L, 3941502L, 4175876L, 4424186L,
-   4687262L, 4965981L, 5261274L, 5574125L, 5905580L, 6256744L, 6628789L,
-   7022958L, 7440565L, 7883004L, 8351751L, 8848372L, 9374524L, 9931962L,
-   10522547L, 11148251L, 11811160L, 12513488L, 13257579L, 14045916L, 14881129L,
-   15766007L, 16703503L, 17696745L, 18749048L, 19863924L, 21045095L, 22296501L,
-   23622320L, 25026976L, 26515158L, 28091831L, 29762258L, 31532014L, 33407005L,
-   35393489L, 37498096L, 39727849L, 42090189L, 44593002L, 47244640L, 50053953L,
-   53030316L, 56183662L, 59524517L, 63064029L, 66814011L, 70786979L, 74996192L,
-   79455697L, 84180379L, 89186005L, 94489281L, 100107906L, 106060631L,
-   112367325L, 119049034L, 126128057L, 133628022L, 141573958L, 149992383L,
-   158911395L, 168360758L, 178372009L, 188978561L, 200215811L, 212121263L,
-   224734649L, 238098067L, 252256115L, 267256044L, 283147915L, 299984767L,
-   317822789L, 336721516L, 356744019L, 377957122L, 400431622L, 424242525L,
-   449469299L, 476196134L, 504512230L, 534512088L, 566295831L, 599969533L,
-   635645578L, 673443031L, 713488038L, 755914244L, 800863244L, 848485051L,
-   898938597L, 952392268L, 1009024459L, 1069024176L };
-static int32_t decrement_table[MAX_NOTE + 1]; // values may be smaller in this actual table used
+   SD(877870L), SD(930071L), SD(985375L), SD(1043969L), SD(1106047L), SD(1171815L), SD(1241495L), SD(1315318L),
+   SD(1393531L), SD(1476395L), SD(1564186L), SD(1657197L), SD(1755739L), SD(1860141L), SD(1970751L),
+   SD(2087938L), SD(2212093L), SD(2343631L), SD(2482991L), SD(2630637L), SD(2787063L), SD(2952790L),
+   SD(3128372L), SD(3314395L), SD(3511479L), SD(3720282L), SD(3941502L), SD(4175876L), SD(4424186L),
+   SD(4687262L), SD(4965981L), SD(5261274L), SD(5574125L), SD(5905580L), SD(6256744L), SD(6628789L),
+   SD(7022958L), SD(7440565L), SD(7883004L), SD(8351751L), SD(8848372L), SD(9374524L), SD(9931962L),
+   SD(10522547L), SD(11148251L), SD(11811160L), SD(12513488L), SD(13257579L), SD(14045916L), SD(14881129L),
+   SD(15766007L), SD(16703503L), SD(17696745L), SD(18749048L), SD(19863924L), SD(21045095L), SD(22296501L),
+   SD(23622320L), SD(25026976L), SD(26515158L), SD(28091831L), SD(29762258L), SD(31532014L), SD(33407005L),
+   SD(35393489L), SD(37498096L), SD(39727849L), SD(42090189L), SD(44593002L), SD(47244640L), SD(50053953L),
+   SD(53030316L), SD(56183662L), SD(59524517L), SD(63064029L), SD(66814011L), SD(70786979L), SD(74996192L),
+   SD(79455697L), SD(84180379L), SD(89186005L), SD(94489281L), SD(100107906L), SD(106060631L),
+   SD(112367325L), SD(119049034L), SD(126128057L), SD(133628022L), SD(141573958L), SD(149992383L),
+   SD(158911395L), SD(168360758L), SD(178372009L), SD(188978561L), SD(200215811L), SD(212121263L),
+   SD(224734649L), SD(238098067L), SD(252256115L), SD(267256044L), SD(283147915L), SD(299984767L),
+   SD(317822789L), SD(336721516L), SD(356744019L), SD(377957122L), SD(400431622L), SD(424242525L),
+   SD(449469299L), SD(476196134L), SD(504512230L), SD(534512088L), SD(566295831L), SD(599969533L),
+   SD(635645578L), SD(673443031L), SD(713488038L), SD(755914244L), SD(800863244L), SD(848485051L),
+   SD(898938597L), SD(952392268L), SD(1009024459L), SD(1069024176L) };
+#if !DO_CONSTANT_POLLTIME
+   static int32_t decrement_table[MAX_NOTE + 1]; // values may be smaller in this actual table used
+#endif
 
 #if DO_VOLUME
 const uint16_t min_ticks_per_period_PGM[MAX_NOTE + 1] PROGMEM = {
-   2446, 2308, 2178, 2056, 1940, 1832, 1728, 1632, 1540, 1454, 1372,
-   1294, 1222, 1154, 1088, 1028, 970, 916, 864, 816, 770, 726, 686, 646,
-   610, 576, 544, 514, 484, 458, 432, 408, 384, 362, 342, 322, 304, 288,
-   272, 256, 242, 228, 216, 204, 192, 180, 170, 160, 152, 144, 136, 128,
-   120, 114, 108, 102, 96, 90, 84, 80, 76, 72, 68, 64, 60, 56, 54, 50,
-   48, 44, 42, 40, 38, 36, 34, 32, 30, 28, 26, 24, 24, 22, 20, 20, 18,
-   18, 16, 16, 14, 14, 12, 12, 12, 10, 10, 10, 8, 8, 8, 8, 6, 6, 6, 6, 6,
-   4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 };
-static uint16_t ticks_per_period[MAX_NOTE + 1];  // values may be larger in this actual table used
+   SU(2446), SU(2308), SU(2178), SU(2056), SU(1940), SU(1832), SU(1728), SU(1632), SU(1540), SU(1454), SU(1372),
+   SU(1294), SU(1222), SU(1154), SU(1088), SU(1028), SU(970), SU(916), SU(864), SU(816), SU(770), SU(726), SU(686), SU(646),
+   SU(610), SU(576), SU(544), SU(514), SU(484), SU(458), SU(432), SU(408), SU(384), SU(362), SU(342), SU(322), SU(304), SU(288),
+   SU(272), SU(256), SU(242), SU(228), SU(216), SU(204), SU(192), SU(180), SU(170), SU(160), SU(152), SU(144), SU(136), SU(128),
+   SU(120), SU(114), SU(108), SU(102), SU(96), SU(90), SU(84), SU(80), SU(76), SU(72), SU(68), SU(64), SU(60), SU(56), SU(54), SU(50),
+   SU(48), SU(44), SU(42), SU(40), SU(38), SU(36), SU(34), SU(32), SU(30), SU(28), SU(26), SU(24), SU(24), SU(22), SU(20), SU(20), SU(18),
+   SU(18), SU(16), SU(16), SU(14), SU(14), SU(12), SU(12), SU(12), SU(10), SU(10), SU(10), SU(8), SU(8), SU(8), SU(8), SU(6), SU(6), SU(6), SU(6), SU(6),
+   SU(4), SU(4), SU(4), SU(4), SU(4), SU(4), SU(4), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2) };
+#if !DO_CONSTANT_POLLTIME
+   static uint16_t ticks_per_period[MAX_NOTE + 1];  // values may be larger in this actual table used
+#endif
 
 const byte min_high_ticks_PGM[128] PROGMEM = {
    // A table showing how many ticks output high should last for each volume setting.
@@ -469,41 +517,47 @@ const byte min_high_ticks_PGM[128] PROGMEM = {
    // Some synthesizers use this mapping from score notation to the center of a range:
    // fff=120, ff=104, f=88, mf=72, mp=56, p=40, pp=24, ppp=8
 
-   /*  00- 15 */  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-   /*  16- 31 */  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-   /*  32- 47 */  2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-   /*  48- 63 */  3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
-   /*  64- 79 */  4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-   /*  80- 95 */  5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6,
-   /*  96-111 */  7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8,
-   /* 112-127 */  9, 9, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 10, 10, 10, 10 };
+   /*  00- 15 */  SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1),
+   /*  16- 31 */  SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1), SU(1),
+   /*  32- 47 */  SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2),
+   /*  48- 63 */  SU(3), SU(3), SU(3), SU(3), SU(3), SU(3), SU(3), SU(3), SU(3), SU(3), SU(3), SU(3), SU(3), SU(3), SU(3), SU(3),
+   /*  64- 79 */  SU(4), SU(4), SU(4), SU(4), SU(4), SU(4), SU(4), SU(4), SU(4), SU(4), SU(4), SU(4), SU(4), SU(4), SU(4), SU(4),
+   /*  80- 95 */  SU(5), SU(5), SU(5), SU(5), SU(5), SU(5), SU(5), SU(5), SU(6), SU(6), SU(6), SU(6), SU(6), SU(6), SU(6), SU(6),
+   /*  96-111 */  SU(7), SU(7), SU(7), SU(7), SU(7), SU(7), SU(7), SU(7), SU(8), SU(8), SU(8), SU(8), SU(8), SU(8), SU(8), SU(8),
+   /* 112-127 */  SU(9), SU(9), SU(9), SU(9), SU(9), SU(9), SU(9), SU(9), SU(10), SU(10), SU(10), SU(10), SU(10), SU(10), SU(10), SU(10) };
 #endif
-static byte high_ticks[128]; // values may be larger in this actual table used
+#if !DO_CONSTANT_POLLTIME
+   static byte high_ticks[128]; // values may be larger in this actual table used
+#endif
 
 #if DO_PERCUSSION
 const byte min_drum_ticks_PGM[128] PROGMEM = { // how often to output bits, in #ticks
    // common values are: 35,36:bass drum, 38,40:snare, 42,44,46:highhat
    // This is a pretty random table!
-   /*  00- 15 */  2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-   /*  16- 31 */  2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-   /*  32- 47 */  2, 2, 2, 8, 8, 2, 5, 3, 4, 3, 3, 2, 3, 2, 3, 2,
-   /*  48- 63 */  2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-   /*  64- 79 */  2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-   /*  80- 95 */  2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-   /*  96-111 */  2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-   /* 112-127 */  2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 };
-static byte drum_ticks[128]; // values may be larger in this actual table used
+   /*  00- 15 */  SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2),
+   /*  16- 31 */  SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2),
+   /*  32- 47 */  SU(2), SU(2), SU(2), SU(8), SU(8), SU(2), SU(5), SU(3), SU(4), SU(3), SU(3), SU(2), SU(3), SU(2), SU(3), SU(2),
+   /*  48- 63 */  SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2),
+   /*  64- 79 */  SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2),
+   /*  80- 95 */  SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2),
+   /*  96-111 */  SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2),
+   /* 112-127 */  SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2), SU(2) };
+#if !DO_CONSTANT_POLLTIME
+   static byte drum_ticks[128]; // values may be larger in this actual table used
+#endif
 
 const uint16_t min_drum_cap_PGM[128] PROGMEM = { // cap on drum duration, in #ticks. 500=25 msec
-   /*  00- 15 */  500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
-   /*  16- 31 */  500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
-   /*  32- 47 */  500, 500, 500, 750, 750, 500, 800, 500, 800, 750, 750, 500, 750, 500, 750, 500,
-   /*  48- 63 */  500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
-   /*  64- 79 */  500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
-   /*  80- 95 */  500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
-   /*  96-111 */  500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
-   /* 112-127 */  500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500 };
-static uint16_t drum_cap[128]; // values may be larger in this actual table used
+   /*  00- 15 */  SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500),
+   /*  16- 31 */  SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500),
+   /*  32- 47 */  SU(500), SU(500), SU(500), SU(750), SU(750), SU(500), SU(800), SU(500), SU(800), SU(750), SU(750), SU(500), SU(750), SU(500), SU(750), SU(500),
+   /*  48- 63 */  SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500),
+   /*  64- 79 */  SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500),
+   /*  80- 95 */  SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500),
+   /*  96-111 */  SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500),
+   /* 112-127 */  SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500), SU(500) };
+#if !DO_CONSTANT_POLLTIME
+   static uint16_t drum_cap[128]; // values may be larger in this actual table used
+#endif
 #endif
 
 void tune_stopnote (byte chan);
@@ -514,11 +568,21 @@ void timer_ISR(void);
 // Initialize and start the timer
 //------------------------------------------------------------------------------
 
-void tune_start_timer(int polltime) {
-   saved_polltime = polltime; // save for tune_resumescore()
+static void do_start_timer(void) {
+   interrupts_per_millisecond = 1000 / polltime;  // this is a truncated approximation
+   millisecond_interrupt_count = interrupts_per_millisecond;
+   #if DBUG
+   Serial.print("polltime in usec: "); Serial.println(polltime);
+   #endif
+   Timer1.initialize(polltime); // start the timer
+   Timer1.attachInterrupt(timer_ISR);
+   timer_running = true; }
+
+#if !DO_CONSTANT_POLLTIME
+void tune_start_timer(int user_polltime) {  // compute RAM tables based on polling rate
    // Decide on an interrupt poll time
-   if (polltime) // set by the caller
-      polltime = max( min(polltime, MAX_POLLTIME_USEC), MIN_POLLTIME_USEC);
+   if (user_polltime) // set by the caller
+      polltime = max( min(user_polltime, MAX_POLLTIME_USEC), MIN_POLLTIME_USEC);
    else { // polltime isn't specified; try to pick a good one
       polltime = MAX_POLLTIME_USEC;  // assume the worst
       if (F_CPU >= 48000000L) polltime = 25; // unless the clock is really fast
@@ -528,12 +592,6 @@ void tune_start_timer(int polltime) {
       else polltime = 10; // fast teensies
       #endif
    }
-   interrupts_per_millisecond = 1000 / polltime;  // this is a truncated approximation
-   millisecond_interrupt_count = interrupts_per_millisecond;
-   #if DBUG
-   Serial.print("polltime in usec: "); Serial.println(polltime);
-   #endif
-
    // Set up the real tables we use based on our chosen polling rate, which may be faster
    // than the 50 microseconds that the table was computed for. We use 32- or 64-bit arithmetic
    // for intermediate results to avoid errors, but we only do this during initialization.
@@ -556,9 +614,8 @@ void tune_start_timer(int polltime) {
       drum_ticks[index] = ((uint32_t)pgm_read_byte(min_drum_ticks_PGM + index) * MAX_POLLTIME_USEC) / polltime;
       drum_cap[index] = ((uint32_t)pgm_read_word(min_drum_cap_PGM + index) * MAX_POLLTIME_USEC) / polltime; }
    #endif
-   Timer1.initialize(polltime); // start the timer
-   Timer1.attachInterrupt(timer_ISR);
-   timer_running = true; }
+   do_start_timer(); }
+#endif
 
 //------------------------------------------------------------------------------
 // Set up output pins, compile-time macros for manipulating them,
@@ -572,18 +629,18 @@ void tune_init_pins(void) {
    digitalWrite(SCOPE_PIN, 0);
    #endif
 
-#if TESLA_COIL
+   #if TESLA_COIL
 #define tune_initchan(pin) \
- if (num_chans < MAX_CHANS) \
-   ++num_chans;
-#else
+   if (num_chans < MAX_CHANS) \
+      ++num_chans;
+   #else
 #define tune_initchan(pin)   \
    if (num_chans < MAX_CHANS) {  \
       pins[num_chans] = pin; \
       pinMode(pin, OUTPUT);  \
       ++num_chans;  \
    }
-#endif
+   #endif
    #ifndef CHAN_0_PIN
 #define CHAN_0_PIN 0
 #define CHAN_0_REG B
@@ -788,13 +845,23 @@ void tune_playnote (byte chan, byte note, byte volume) {
             _tune_volume[chan] = volume;
             teslacoil_change_volume(chan, volume); }
          #else
-         max_high_ticks[chan] = min(high_ticks[volume], ticks_per_period[note]);
+         max_high_ticks[chan] =
+            #if DO_CONSTANT_POLLTIME
+            min(pgm_read_byte(min_high_ticks_PGM + volume), pgm_read_byte(min_ticks_per_period_PGM + note));
+            #else
+            min(high_ticks[volume], ticks_per_period[note]);
+            #endif
          current_high_ticks[chan] = 0; // we're starting with output low
          #if DBUG
          Serial.print("  max high ticks="); Serial.println(max_high_ticks[chan]);
          #endif
          #endif
-         decrement[chan] = decrement_table[note];
+         decrement[chan] =
+            #if DO_CONSTANT_POLLTIME
+            pgm_read_dword(max_decrement_PGM + note);
+            #else
+            decrement_table[note];
+            #endif
          accumulator[chan] = ACCUM_RESTART;
          playing[chan] = true; }
       #if DO_PERCUSSION
@@ -802,8 +869,13 @@ void tune_playnote (byte chan, byte note, byte volume) {
          // Following Connor Nishijima's suggestion, we only play one at a time.
          if (drum_chan == NO_DRUM) { // drum player is free
             drum_chan = chan; // assign it
+            #if DO_CONSTANT_POLLTIME
+            drum_tick_count = drum_tick_limit = pgm_read_byte(min_drum_ticks_PGM + note - 128);
+            drum_duration = pgm_read_word(min_drum_cap_PGM + note - 128); // cap on drum note duration
+            #else
             drum_tick_count = drum_tick_limit = drum_ticks[note - 128];
             drum_duration = drum_cap[note - 128]; // cap on drum note duration
+            #endif
             #if DBUG
             Serial.print("  drum tick limit="); Serial.println(drum_tick_limit);
             #endif
@@ -815,8 +887,13 @@ void tune_playnote (byte chan, byte note, byte volume) {
 void tune_playnote (byte chan, byte note) {
    if (chan < num_chans) {
       if (note > MAX_NOTE) note = MAX_NOTE;
-      decrement[chan] = decrement_table[note];
-      accumulator[chan] = ACCUM_RESTART;
+      decrement[chan] =
+         #if DO_CONSTANT_POLLTIME
+         pgm_read_dword(max_decrement_PGM + note)
+         #else
+         decrement_table[note];
+         #endif
+         accumulator[chan] = ACCUM_RESTART;
       playing[chan] = true; } }
 #endif
 
@@ -851,7 +928,11 @@ void tune_playscore (const byte * score) {
       tune_init_pins();
    if (tune_playing) tune_stopscore();
    if (!timer_running)
-      tune_start_timer(saved_polltime);
+   #if DO_CONSTANT_POLLTIME
+      do_start_timer(); // using compile-time tables, so just get the timer going
+   #else
+      tune_start_timer(0); // compute the RAM tables, then get the timer going
+   #endif
    score_start = score;
    volume_present = ASSUME_VOLUME;
    num_chans_used = MAX_CHANS;
@@ -883,7 +964,7 @@ void tune_stepscore (void) { // continue in the score
    byte cmd, opcode, chan, note, vol;
    /* Do score commands until a "wait" is found, or the score is stopped.
       This is called initially from tune_playscore, but then is called
-      from the slow interrupt routine when waits expire. */
+      from the interrupt routine when waits expire. */
    while (1) {
       cmd = pgm_read_byte(score_cursor++);
       if (cmd < 0x80) { /* wait count in msec. */
@@ -955,11 +1036,11 @@ void tune_stop_timer(void) {
 //------------------------------------------------------------------------------
 
 void tune_resumescore(bool init_pins) {
-  if (init_pins) tune_init_pins();
-  if (score_cursor) {
-    if (!timer_running) tune_start_timer(saved_polltime);
-    tune_stepscore();  // startup commands again
-    tune_playing = true; } }
+   if (init_pins) tune_init_pins(); // maybe reinitialized the I/O
+   if (score_cursor) {
+      if (!timer_running) do_start_timer(); // maybe restart timer
+      tune_stepscore();  // kick-start the commands again
+      tune_playing = true; } }
 
 //------------------------------------------------------------------------------
 //  Timer interrupt Service Routine

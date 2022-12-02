@@ -678,7 +678,7 @@ const unsigned char PROGMEM batman_score [] = {
 // This score contains 4122 bytes, and 6 tone generators are used.
 
 const unsigned char PROGMEM test_score [] = { // test each of 8 channels individually
-#define TESTCHAN(n) 0x90+n, 69+n, 5,0, 0x80+n 
+#define TESTCHAN(n) 0x90+n, 69+n, 3,0, 0x80+n 
 TESTCHAN(0),
 TESTCHAN(1),
 TESTCHAN(2),
@@ -712,7 +712,7 @@ void loop () {
     #endif
   }
   delay(2000);
-  tune_playscore(batman_score); // volume and drums
+  tune_playscore(batman_score); // volume and drums; sounds terrible if DO_PERCUSSION is 0!
   while (tune_playing) ;
   delay(2000);
 }

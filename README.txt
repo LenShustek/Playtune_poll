@@ -1,3 +1,8 @@
+*** 13 November 2022: A major improvement to allow tables to be in Flash ROM
+*** memory when the polling interval is known at compile time. That saves
+*** about 1200 bytes of RAM, which is a big deal on a Nano with 2K! 
+*** We do this when DO_CONSTANT_POLLTIME is set to 1, which is now the default.
+
 
      Playtune_poll
 
@@ -47,7 +52,7 @@
    where I use Flexible Timer Module FTM0 for generating precise one-shot pulses.
    But I ultimately switched to the polling version to play more simultaneous notes.)
    www.github.com/LenShustek/Playtune_Teensy
-   
+
    ***** Details about this version: Playtune_poll
 
    The advantage of this polling scheme is that you can play more simultaneous notes
@@ -132,7 +137,8 @@
 
    void tune_start_timer(int microseconds)
 
-    This is optional. Call it to set how often notes should be checked for transitions,
+    This is optional, and is available only if DO_CONSTANT_POLLTIME is set to 0.
+    Call it to set how often notes should be checked for transitions,
     from 5 to 50 microseconds. If you don't call it, we'll pick something that seems
     appropriate from the type of microcontroller and the frequency it's running at.
 
@@ -149,7 +155,7 @@
 
    void tune_speed(unsigned int percent)
 
-    This changes playback speed to the specified percent of normal. 
+    This changes playback speed to the specified percent of normal.
     The minimum is percent=20 (5x slowdown),
     and the maximum is percent=500 (5x speedup).
 
